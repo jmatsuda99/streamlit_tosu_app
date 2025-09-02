@@ -67,7 +67,8 @@ fig_all = plot_timeseries(ts, y_col, "使用電力量(ロス後)の30分推移�
 st.pyplot(fig_all)
 
 st.markdown("**任意日（日内）**")
-any_day = st.date_input("表示する日付", ts.index.date.min())
+import datetime as _dt
+any_day = st.date_input("表示する日付", _dt.date.fromtimestamp(ts.index.min().timestamp()))
 fig_day = plot_day(ts, y_col, str(any_day))
 st.pyplot(fig_day)
 
@@ -81,19 +82,22 @@ if st.button("予測を実行"):
     if run_step6:
         pred6 = forecast_lr(ts, y_col, str(target_day))
         st.markdown("**6) 単純LR**")
-        st.line_chart(pred6)
+        import matplotlib.pyplot as _plt
+fig6, ax6 = _plt.subplots(figsize=(12,5)); ax6.plot(pred6.index, pred6.values); ax6.set_title("6) 単純LR 予測"); ax6.set_xlabel("時刻"); ax6.set_ylabel("需要電力 [kW]"); fig6.tight_layout(); st.pyplot(fig6)
         st.download_button("CSVダウンロード（6）", pred6.to_csv().encode("utf-8-sig"),
                            file_name=f"forecast_lr_{target_day}.csv", mime="text/csv")
     if run_step7:
         pred7 = forecast_weekday_slot(ts, y_col, str(target_day))
         st.markdown("**7) 曜日×時刻平均**")
-        st.line_chart(pred7)
+        import matplotlib.pyplot as _plt
+fig7, ax7 = _plt.subplots(figsize=(12,5)); ax7.plot(pred7.index, pred7.values); ax7.set_title("7) 曜日×時刻平均 予測"); ax7.set_xlabel("時刻"); ax7.set_ylabel("需要電力 [kW]"); fig7.tight_layout(); st.pyplot(fig7)
         st.download_button("CSVダウンロード（7）", pred7.to_csv().encode("utf-8-sig"),
                            file_name=f"forecast_wdslot_{target_day}.csv", mime="text/csv")
     if run_step8:
         pred8, name8, imp = forecast_ml(ts, y_col, str(target_day))
         st.markdown(f"**8) ML（{name8}）**")
-        st.line_chart(pred8)
+        import matplotlib.pyplot as _plt
+fig8, ax8 = _plt.subplots(figsize=(12,5)); ax8.plot(pred8.index, pred8.values); ax8.set_title(f"8) ML（{name8}） 予測"); ax8.set_xlabel("時刻"); ax8.set_ylabel("需要電力 [kW]"); fig8.tight_layout(); st.pyplot(fig8)
         if imp is not None:
             feat_names = ["slot","weekday","month","lag_1d","lag_2d","lag_1w",
                           "roll_mean_1d","roll_mean_2d","roll_mean_1w"]

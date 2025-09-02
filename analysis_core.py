@@ -9,17 +9,33 @@ from pathlib import Path
 from datetime import timedelta
 
 def set_jp_font():
+    """Prefer local fonts (./fonts) then system fonts to avoid mojibake on Streamlit Cloud."""
     try:
-        from matplotlib.font_manager import findSystemFonts, FontProperties
-        candidates = ["Noto Sans CJK JP", "NotoSansCJKJP", "NotoSansCJK", "NotoSansJP",
-                      "Source Han Sans", "SourceHanSans", "IPAGothic", "VL Gothic", "TakaoGothic"]
-        fonts = findSystemFonts(fontext='ttf') + findSystemFonts(fontext='otf')
+        from matplotlib.font_manager import findSystemFonts, FontProperties, fontManager
+        from pathlib import Path as _Path
+        candidates = [
+            "NotoSansJP-Regular.ttf", "NotoSansJP-Medium.ttf", "IPAexGothic.ttf", "IPAGothic.ttf"
+        ]
+        local_dir = _Path(__file__).parent / "fonts"
         chosen = None
-        for f in fonts:
-            low = f.lower().replace(" ", "")
-            if any(c.replace(" ", "").lower() in low for c in candidates):
-                chosen = FontProperties(fname=f)
+        # 1) Local fonts
+        for name in candidates:
+            fpath = local_dir / name
+            if fpath.exists():
+                fontManager.addfont(str(fpath))
+                chosen = FontProperties(fname=str(fpath))
                 break
+        # 2) System fonts
+        if chosen is None:
+            sysfonts = findSystemFonts(fontext='ttf') + findSystemFonts(fontext='otf')
+            sys_candidates = ["Noto Sans CJK JP", "NotoSansCJKJP", "NotoSansCJK", "NotoSansJP",
+                              "Source Han Sans", "SourceHanSans", "IPAGothic", "VL Gothic", "TakaoGothic",
+                              "Yu Gothic", "Meiryo", "MS Gothic"]
+            for f in sysfonts:
+                low = f.lower().replace(" ", "")
+                if any(c.replace(" ", "").lower() in low for c in sys_candidates):
+                    chosen = FontProperties(fname=f)
+                    break
         if chosen:
             matplotlib.rcParams['font.family'] = chosen.get_name()
         matplotlib.rcParams['axes.unicode_minus'] = False
@@ -75,9 +91,22 @@ def plot_timeseries(df_ts: pd.DataFrame, y_col: str, title: str):
     fig.tight_layout()
     return fig
 
+
 def plot_day(df_ts: pd.DataFrame, y_col: str, day_str: str):
-    day_df = df_ts.loc[day_str].dropna()
-    return plot_timeseries(day_df.to_frame(), y_col, f"{day_str} の30分推移［kW］")
+    """Day slice and plot; robust to DataFrame/Series return types."""
+    import pandas as _pd
+    set_jp_font()
+    # Normalize day string
+    day_str = str(_pd.to_datetime(day_str).date())
+    day_sel = df_ts.loc[day_str]
+    # Ensure DataFrame with the target column
+    if isinstance(day_sel, _pd.Series):
+        df_to_plot = day_sel.to_frame(name=y_col)
+    else:
+        df_to_plot = day_sel[[y_col]] if y_col in day_sel.columns else day_sel.iloc[:, [0]]
+        df_to_plot.columns = [y_col]
+    df_to_plot = df_to_plot.dropna()
+    return plot_timeseries(df_to_plot, y_col, f"{day_str} の30分推移［kW］")
 
 def peak_day(df_ts: pd.DataFrame, y_col: str):
     daily_peak = df_ts[y_col].resample("D").max()
