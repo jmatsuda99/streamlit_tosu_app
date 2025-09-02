@@ -3,6 +3,7 @@
 import streamlit as st
 import pandas as pd
 import datetime as _dt
+import matplotlib.pyplot as plt
 
 from analysis_core import (
     set_jp_font, try_parse_dates, first_datetime_col, pick_usage_col,
@@ -84,8 +85,7 @@ st.pyplot(fig_peak)
 # 予測（選択実行）
 st.subheader("予測（選択したもののみ実行）")
 if st.button("予測を実行", type="primary"):
-    set_jp_font()
-    import matplotlib.pyplot as plt
+    set_jp_font()  # no-op but keeps unicode minus correct
 
     if run_step6:
         pred6 = forecast_lr(ts, y_col, str(target_day))

@@ -1,13 +1,21 @@
-# 鳥栖 需要分析ツール（GitHub + Streamlit）
+# 鳥栖 需要分析ツール（CLEAN版：フォント未指定・日付抽出バグ修正）
+
+## 特長
+- **日付抽出のKeyError対策**：その日 0:00〜24:00 未満の範囲で抽出（`.loc["YYYY-MM-DD"]` 不使用）
+- **フォント未指定**：環境フォント任せ（日本語はシステムフォントに依存）。
+- 30分正規化（kWh/30分 → kW×2）、任意日表示、最大ピーク日、自動/学習予測（6〜8は解析時に選択）
+
+## デプロイ
+1. 本フォルダをGitHubにpush（メインファイルは `app.py`）
+2. Streamlit CloudでNew app → リポジトリ/ブランチ/メインファイルを指定
+3. 依存は `requirements.txt`（**LightGBMなし**）を推奨  
+   - LightGBMが必要なら `requirements_with_lightgbm.txt` を `requirements.txt` として使用
 
 ## 使い方
-1. このフォルダをGitHubにpush（メインファイルは `app.py`）
-2. Streamlit CloudでNew app → リポジトリ/ブランチ/メインファイルを指定
-3. 左サイドバーでExcelをアップロード → DB保存 → 解析対象を選択
-4. 6〜8の予測はチェックで実行（LightGBMが無い環境は自動でGBDTにフォールバック）
+- 左サイドバーで `.xlsx` をアップロード（DBに保存）→ 下のプルダウンから選択
+- シート・時刻列・電力列を選択
+- 任意日/ピーク日のグラフを確認
+- 予測は 6/7/8 をチェックして「予測を実行」
 
-## ヒント（白画面対策）
-- デプロイ設定の **Main file path** が `app.py` になっているか確認
-- **Logs** を開き、ModuleNotFoundError（依存漏れ）、SyntaxError を確認
-- `requirements.txt` をリポジトリ直下に置く
-- 依存が重い場合は `lightgbm` を外してデプロイ → 後で追加
+## 既知の注意
+- LightGBM のビルドに失敗する環境があります。その場合は同梱の `requirements.txt`（LightGBM無し）を使ってください（アプリはGBDTへ自動フォールバックします）。

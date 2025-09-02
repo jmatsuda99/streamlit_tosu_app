@@ -3,45 +3,16 @@
 import pandas as pd
 import numpy as np
 import matplotlib
-import matplotlib.pyplot as plt
+
 from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
-from pathlib import Path
 from datetime import timedelta
 
+# ---- Font policy: do not specify fonts (only avoid unicode minus issues) ----
 def set_jp_font():
-    """Prefer local fonts (./fonts) then system fonts to avoid mojibake on Streamlit Cloud."""
-    try:
-        from matplotlib.font_manager import findSystemFonts, FontProperties, fontManager
-        from pathlib import Path as _Path
-        candidates = [
-            "NotoSansJP-Regular.ttf", "NotoSansJP-Medium.ttf", "IPAexGothic.ttf", "IPAGothic.ttf"
-        ]
-        local_dir = _Path(__file__).parent / "fonts"
-        chosen = None
-        # 1) Local fonts
-        for name in candidates:
-            fpath = local_dir / name
-            if fpath.exists():
-                fontManager.addfont(str(fpath))
-                chosen = FontProperties(fname=str(fpath))
-                break
-        # 2) System fonts
-        if chosen is None:
-            sysfonts = findSystemFonts(fontext='ttf') + findSystemFonts(fontext='otf')
-            sys_candidates = ["Noto Sans CJK JP", "NotoSansCJKJP", "NotoSansCJK", "NotoSansJP",
-                              "Source Han Sans", "SourceHanSans", "IPAGothic", "VL Gothic", "TakaoGothic",
-                              "Yu Gothic", "Meiryo", "MS Gothic"]
-            for f in sysfonts:
-                low = f.lower().replace(" ", "")
-                if any(c.replace(" ", "").lower() in low for c in sys_candidates):
-                    chosen = FontProperties(fname=f)
-                    break
-        if chosen:
-            matplotlib.rcParams['font.family'] = chosen.get_name()
-        matplotlib.rcParams['axes.unicode_minus'] = False
-    except Exception:
-        pass
+    """No explicit font setting. Keep minus sign rendering correct."""
+    matplotlib.rcParams['axes.unicode_minus'] = False
 
+# ---- Helpers ----
 def try_parse_dates(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     for col in df.columns:
@@ -74,14 +45,25 @@ def pick_usage_col(df: pd.DataFrame):
     return None
 
 def ensure_30min_kW(df: pd.DataFrame, time_col: str, y_col: str) -> pd.DataFrame:
+    """Index by time_col, resample to 30 min kWh, convert to kW (×2)."""
     tmp = df[[time_col, y_col]].dropna().copy()
-    tmp[time_col] = pd.to_datetime(tmp[time_col], errors="coerce")
-    tmp = tmp.dropna(subset=[time_col]).set_index(time_col).sort_index()
+    t = pd.to_datetime(tmp[time_col], errors="coerce")
+    tmp[time_col] = t
+    tmp = tmp.dropna(subset=[time_col]).set_index(time_col)
+    # normalize tz and sort
+    try:
+        tmp.index = tmp.index.tz_localize(None)
+    except Exception:
+        pass
+    tmp = tmp.sort_index()
+    # resample & convert
     ts = tmp[[y_col]].resample("30T").sum()
     ts[y_col] = ts[y_col] * 2.0  # kWh/30分 → kW
     return ts
 
+# ---- Plotters ----
 def plot_timeseries(df_ts: pd.DataFrame, y_col: str, title: str):
+    import matplotlib.pyplot as plt
     set_jp_font()
     fig, ax = plt.subplots(figsize=(12,5))
     ax.plot(df_ts.index, df_ts[y_col])
@@ -91,59 +73,64 @@ def plot_timeseries(df_ts: pd.DataFrame, y_col: str, title: str):
     fig.tight_layout()
     return fig
 
-
 def plot_day(df_ts: pd.DataFrame, y_col: str, day_str: str):
-    """Day slice and plot; robust to DataFrame/Series return types."""
+    """Slice by 0:00-24:00 range instead of label equality to avoid KeyError."""
     import pandas as _pd
+    import matplotlib.pyplot as _plt
     set_jp_font()
-    # Normalize day string
-    day_str = str(_pd.to_datetime(day_str).date())
-    day_sel = df_ts.loc[day_str]
-    # Ensure DataFrame with the target column
-    if isinstance(day_sel, _pd.Series):
-        df_to_plot = day_sel.to_frame(name=y_col)
-    else:
-        df_to_plot = day_sel[[y_col]] if y_col in day_sel.columns else day_sel.iloc[:, [0]]
-        df_to_plot.columns = [y_col]
-    df_to_plot = df_to_plot.dropna()
-    return plot_timeseries(df_to_plot, y_col, f"{day_str} の30分推移［kW］")
+    tmp = df_ts.copy()
+    tmp.index = _pd.to_datetime(tmp.index)
+    try:
+        tmp.index = tmp.index.tz_localize(None)
+    except Exception:
+        pass
+    day = _pd.to_datetime(day_str).normalize()
+    next_day = day + _pd.Timedelta(days=1)
+    day_df = tmp[(tmp.index >= day) & (tmp.index < next_day)]
+    if day_df.empty:
+        fig, ax = _plt.subplots(figsize=(8,3))
+        ax.text(0.5, 0.5, f"指定日のデータが見つかりません: {day.date()}",
+                ha="center", va="center")
+        ax.axis("off")
+        return fig
+    return plot_timeseries(day_df[[y_col]], y_col, f"{day.date()} の30分推移［kW］")
 
 def peak_day(df_ts: pd.DataFrame, y_col: str):
     daily_peak = df_ts[y_col].resample("D").max()
-    day = daily_peak.idxmax().date()
-    return str(day)
+    return str(daily_peak.idxmax().date())
 
-# --- Forecast models ---
+# ---- Forecast models ----
 def forecast_lr(ts: pd.DataFrame, y_col: str, target_day: str):
+    """(6) Linear regression on slot over last 7 days."""
     from sklearn.linear_model import LinearRegression
     df_m = ts.copy()
     df_m["slot"] = ((df_m.index.hour*60 + df_m.index.minute)//30).astype(int)
     last_day = df_m.index.date.max()
-    start = last_day - timedelta(days=7)
-    train = df_m[(df_m.index.date >= start) & (df_m.index.date <= last_day)]
+    start = pd.Timestamp(last_day) - pd.Timedelta(days=7)
+    train = df_m[(df_m.index >= start.normalize()) & (df_m.index <= pd.Timestamp(last_day) + pd.Timedelta(days=1))]
     X, y = train[["slot"]], train[y_col]
     model = LinearRegression().fit(X, y)
     pred_index = pd.date_range(start=pd.Timestamp(target_day), periods=48, freq="30T")
     Xp = pd.DataFrame({"slot": np.arange(48)}, index=pred_index)
     y_pred = model.predict(Xp[["slot"]])
-    pred = pd.Series(y_pred, index=pred_index, name="予測[kW]")
-    return pred
+    return pd.Series(y_pred, index=pred_index, name="予測[kW]")
 
 def forecast_weekday_slot(ts: pd.DataFrame, y_col: str, target_day: str):
+    """(7) Weekday × slot mean over last 30 days."""
     df_m = ts.copy()
     df_m["slot"] = ((df_m.index.hour*60 + df_m.index.minute)//30).astype(int)
     df_m["weekday"] = df_m.index.weekday
-    last_day = df_m.index.date.max()
-    start = last_day - timedelta(days=30)
-    train = df_m[df_m.index.date >= start]
+    last_day = df_m.index.max().date()
+    start = pd.Timestamp(last_day) - pd.Timedelta(days=30)
+    train = df_m[df_m.index >= start.normalize()]
     pivot = train.groupby(["weekday","slot"])[y_col].mean().unstack(0)
     wd = pd.Timestamp(target_day).weekday()
     pred_vals = pivot[wd].values
     pred_index = pd.date_range(start=pd.Timestamp(target_day), periods=48, freq="30T")
-    pred = pd.Series(pred_vals, index=pred_index, name="予測[kW]")
-    return pred
+    return pd.Series(pred_vals, index=pred_index, name="予測[kW]")
 
 def forecast_ml(ts: pd.DataFrame, y_col: str, target_day: str):
+    """(8) LightGBM if available, else GradientBoostingRegressor."""
     df = ts[[y_col]].copy()
     df["slot"] = ((df.index.hour*60 + df.index.minute)//30).astype(int)
     df["weekday"] = df.index.weekday
@@ -155,10 +142,14 @@ def forecast_ml(ts: pd.DataFrame, y_col: str, target_day: str):
     df["roll_mean_2d"] = df[y_col].rolling(96).mean()
     df["roll_mean_1w"] = df[y_col].rolling(48*7).mean()
     df = df.dropna()
-    feat = ["slot","weekday","month","lag_1d","lag_2d","lag_1w","roll_mean_1d","roll_mean_2d","roll_mean_1w"]
+
+    feat = ["slot","weekday","month","lag_1d","lag_2d","lag_1w",
+            "roll_mean_1d","roll_mean_2d","roll_mean_1w"]
     split = int(len(df)*0.8)
-    Xtr, ytr = df.iloc[:split][feat], df.iloc[:split][ycol]
-    Xva, yva = df.iloc[split:][feat], df.iloc[split:][ycol]
+    Xtr, ytr = df.iloc[:split][feat], df.iloc[:split][y_col]
+    Xva, yva = df.iloc[split:][feat], df.iloc[split:][y_col]
+
+    model_name, importance = "", None
     try:
         import lightgbm as lgb
         model = lgb.LGBMRegressor(n_estimators=500, learning_rate=0.05,
@@ -170,7 +161,6 @@ def forecast_ml(ts: pd.DataFrame, y_col: str, target_day: str):
         from sklearn.ensemble import GradientBoostingRegressor
         model = GradientBoostingRegressor(random_state=42).fit(Xtr, ytr)
         model_name = "GradientBoosting (fallback)"
-        importance = None
 
     ser = ts[y_col]
     lag_1d = ser.iloc[-48:].values

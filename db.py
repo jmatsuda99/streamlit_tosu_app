@@ -23,7 +23,6 @@ def init_db():
     con.close()
 
 def sha256_bytes(b: bytes) -> str:
-    import hashlib
     h = hashlib.sha256(); h.update(b); return h.hexdigest()
 
 def add_file(filename: str, content: bytes) -> str:
